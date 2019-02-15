@@ -1,0 +1,184 @@
+---
+title: "BCG TechHack"
+author: "Team 10: Saurabh Annadate Tanya Tandon"
+date: "26 January 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Exploratory Data Analysis
+
+## Loading the Data and Libraries
+```{r}
+#Removing all existing environment variables
+rm(list = ls())
+
+#Loading libraries
+library(lubridate) #Library to work with date data
+library(pROC)
+library(nnet)
+
+#Loading the Training data
+TrainDataCust <- read.csv("ml_case_training_data_v2.csv", stringsAsFactors = FALSE)
+TrainDataHist <- read.csv("ml_case_training_hist_data.csv", stringsAsFactors = FALSE)
+TrainDataChurn <- read.csv("ml_case_training_output.csv", stringsAsFactors = FALSE)
+
+
+```
+
+## Cleaning the data and creating a master dataset
+```{r}
+
+#Merging in Churn Flag
+TrainDataCust <- merge(TrainDataCust, TrainDataChurn, by = 'id', all.x = TRUE, all.y = FALSE)
+
+#Creating a variable to check if the electricity consumption in the last month was higher or lower than the average 12 month consumption
+TrainDataCust$Lm_over_12m_avg <- TrainDataCust$cons_last_month - (TrainDataCust$cons_12m/12)
+
+#Constructing a duration of contract field in years
+TrainDataCust$date_activ <- ymd(TrainDataCust$date_activ)
+TrainDataCust$date_end <- ymd(TrainDataCust$date_end)
+
+TrainDataCust$Contract_Length <- as.numeric(difftime(TrainDataCust$date_end,TrainDataCust$date_activ,units="days")) / 365
+
+
+#Construct a binary flag for if the contract was modified in the duration
+TrainDataCust$date_modif_prod <- ymd(TrainDataCust$date_modif_prod)
+TrainDataCust$mod_flag <- 0
+TrainDataCust$mod_flag[(TrainDataCust$date_modif_prod >= TrainDataCust$date_activ) & (TrainDataCust$date_modif_prod <= TrainDataCust$date_end)] <- 1
+
+
+#Creating a binary variable for whetherthe customer has a gas connection or not
+TrainDataCust$has_gas_bin <- 0
+TrainDataCust$has_gas_bin[(TrainDataCust$has_gas=='t')] <- 1
+
+
+#Creating the final dataset
+TrainData <- TrainDataCust[,c('id', 'churn', 'cons_12m', 'cons_gas_12m', 'cons_last_month', 'Lm_over_12m_avg', 'Contract_Length','mod_flag','has_gas_bin','imp_cons','num_years_antig','nb_prod_act')]
+
+```
+
+## Plotting the data
+
+```{r}
+plot(TrainData$cons_12m)
+plot(TrainData$cons_gas_12m)
+plot(TrainData$cons_last_month)
+plot(TrainData$Lm_over_12m_avg)
+plot(TrainData$Contract_Length)
+plot(TrainData$imp_cons)
+plot(TrainData$num_years_antig)
+plot(TrainData$nb_prod_act)
+
+```
+
+
+
+In order to ensure interpretibility of the model, we intend to use simple logistic regression to predict the probability of churn using our data
+
+## Running Logistic regression
+```{r}
+# Transforming variables
+TrainData1 <- TrainData[,-1]
+
+lmfit <- glm(churn ~ ., data = TrainData1, family = "binomial") 
+
+lmfit1 <- step(lmfit, trace = 0)
+
+summary(lmfit1)
+
+```
+
+## Evaluation on the basis of AUC
+
+```{r}
+
+TrainDataPred <- predict(lmfit1, newdata = TrainData1, type = 'response')
+
+
+# Calculating CCRs for various p star values
+
+p <- seq(0, 1, 0.001)
+
+CCR <- p
+j <- 0
+
+for (i in p)
+{
+  tab1 = table(factor(TrainData1$churn, levels = c(0,1)),
+              factor(TrainDataPred > i, levels = c(FALSE,TRUE)))
+  
+  CCR[j] = ((tab1[1,1] / (tab1[1,1] + tab1[1,2])) + (tab1[2,2] / (tab1[2,1] + tab1[2,2])))/2
+  
+  j = j + 1
+}
+
+
+plot(p,CCR, xlim = c(0,1))
+
+#Getting the probability threshold using maximum Correct classification Rate
+pstar <- p[which.is.max(CCR[CCR < 1])]
+
+
+# Looking at the ROC curve
+
+plot.roc(TrainData1$churn, TrainDataPred, xlab = "Specificity")
+
+```
+
+
+
+## Testing on test data
+
+```{r}
+#Loading the Test data
+TestDataCust <- read.csv("ml_case_test_data_v2.csv", stringsAsFactors = FALSE)
+TestDataHist <- read.csv("ml_case_test_hist_data.csv", stringsAsFactors = FALSE)
+
+
+#Creating a variable to check if the electricity consumption in the last month was higher or lower than the average 12 month consumption
+TestDataCust$Lm_over_12m_avg <- TestDataCust$cons_last_month - (TestDataCust$cons_12m/12)
+
+#Constructing a duration of contract field in years
+TestDataCust$date_activ <- ymd(TestDataCust$date_activ)
+TestDataCust$date_end <- ymd(TestDataCust$date_end)
+
+TestDataCust$Contract_Length <- as.numeric(difftime(TestDataCust$date_end,TestDataCust$date_activ,units="days")) / 365
+
+
+#Construct a binary flag for if the contract was modified in the duration
+TestDataCust$date_modif_prod <- ymd(TestDataCust$date_modif_prod)
+TestDataCust$mod_flag <- 0
+TestDataCust$mod_flag[(TestDataCust$date_modif_prod >= TestDataCust$date_activ) & (TestDataCust$date_modif_prod <= TestDataCust$date_end)] <- 1
+
+
+#Creating a binary variable for whetherthe customer has a gas connection or not
+TestDataCust$has_gas_bin <- 0
+TestDataCust$has_gas_bin[(TestDataCust$has_gas=='t')] <- 1
+
+
+#Creating the final dataset
+TestData <- TestDataCust[,c('id', 'cons_12m', 'cons_gas_12m', 'cons_last_month', 'Lm_over_12m_avg', 'Contract_Length','mod_flag','has_gas_bin','imp_cons','num_years_antig','nb_prod_act')]
+
+
+#Predicting the probability for the customer to churn
+TestDataPred <- predict(lmfit1, newdata = TestData, type = 'response')
+
+#Doing hard classification
+TestClass <- TestDataPred
+TestClass <- 0
+
+
+#Creating final database and writing the dataset
+FinalClassification <- data.frame(TestData$id,TestDataPred)
+
+FinalClassification$TestClass <- 0
+
+FinalClassification$TestClass[(FinalClassification$TestDataPred >= pstar)] <- 1
+
+write.csv(FinalClassification, file = 'ml_case_test_output_team7.csv')
+
+```
+
